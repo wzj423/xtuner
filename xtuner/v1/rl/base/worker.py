@@ -516,13 +516,13 @@ class TrainingWorker(SingleAcceleratorWorker):
                 all_rollout_is_metrics.append(rollout_is_metrics)
                 all_mismatch_metrics.append(mismatch_metrics)
 
-        worker_log_item: WorkerLogItem = {"train_entropy": 0.0, "train_metrics": [], "sft_train_metrics": {}}
-        logger_msg = f"Rollout {rollout_idx}: "
-        sum_entropy = cast(torch.Tensor, sum_entropy)
-        dist.all_reduce(sum_entropy, op=dist.ReduceOp.SUM)
-        avg_sum_entropy = sum_entropy / global_grad_tokens if global_grad_tokens > 0 else torch.tensor(0.0)
-        worker_log_item["train_entropy"] = avg_sum_entropy.item()
-        logger_msg += f"avg entropy: {avg_sum_entropy:.4f}"
+        metrics = {
+            "sum_entropy": sum_entropy,
+            "sum_rollout_entropy": sum_rollout_entropy,
+            "all_mismatch_metrics": all_mismatch_metrics,
+            "all_rollout_is_metrics": all_rollout_is_metrics,
+        }
+        return loss_ctx_input_list, metrics
 
     @ray_method
     def fit(self, data_batches: list[list[WorkerInputItem]], rollout_idx: int):
@@ -579,10 +579,7 @@ class TrainingWorker(SingleAcceleratorWorker):
         global_grad_tokens = rank_grad_tokens.clone()
         dist.all_reduce(global_grad_tokens, op=dist.ReduceOp.SUM)
 
-        worker_log_item: WorkerLogItem = {
-            "train_entropy": 0.0,
-            "train_metrics": [],
-        }
+        worker_log_item: WorkerLogItem = {"train_entropy": 0.0, "train_metrics": [], "sft_train_metrics": {}}
         log_parts = []
 
         sum_entropy = cast(torch.Tensor, metrics["sum_entropy"])
@@ -678,7 +675,10 @@ class TrainingWorker(SingleAcceleratorWorker):
                 f"{key}={value:.4f}" if isinstance(value, float) else f"{key}={value}"
                 for key, value in log_info.items()
             )
-            log_str = f"Rank{self.rank} Rollout {rollout_idx} Step {i}: gradient_accumulation_steps={num_packs_this_step}" + log_str
+            log_str = (
+                f"Rank{self.rank} Rollout {rollout_idx} Step {i}: gradient_accumulation_steps={num_packs_this_step}, "
+                + log_str
+            )
             self.logger.info(log_str)
 
         self._rollout_step += 1
